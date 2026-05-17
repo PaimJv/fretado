@@ -1,12 +1,11 @@
+import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import os
 import warnings
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinter import ttk
+import io
 
-# Silencia avisos de formatação do Excel para manter o terminal limpo
+# Silencia avisos de formatação do Excel
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # --- CAMINHOS FIXOS CONFIGURADOS ---
@@ -43,16 +42,48 @@ def e_numero(valor):
         return True
     except:
         return False
+    
+def filtrar_dataframe(df, chave_aba):
+    """Cria filtros dinâmicos usando um checkbox estável para cada coluna do DataFrame."""
+    df_filtrado = df.copy()
+    
+    # CORREÇÃO: Substituído st.expander por st.checkbox com key.
+    # Inicia como False (fechado) e não fecha sozinho após a primeira filtragem.
+    if st.checkbox("🔍 Filtrar Colunas", value=False, key=f"ativar_filtros_{chave_aba}"):
+        st.markdown("---") # Pequena linha divisória estética
+        # Cria campos de seleção para cada coluna de forma vertical e limpa
+        for col in df.columns:
+            valores_unicos = sorted(df[col].dropna().unique().tolist())
+            selecionados = st.multiselect(
+                f"Filtrar por {col}", 
+                options=valores_unicos, 
+                key=f"filter_{chave_aba}_{col}"
+            )
+            if selecionados:
+                df_filtrado = df_filtrado[df_filtrado[col].isin(selecionados)]
+        st.markdown("---")
+        
+    return df_filtrado
 
-def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base_geral, caminho_salvamento):
+def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base_geral):
     # 1. CARREGAR REFERÊNCIA DE SETORES (UTF-8)
+    if not os.path.exists(arquivo_setores_csv):
+        st.error(f"Arquivo base de setores não encontrado no servidor virtual: {arquivo_setores_csv}")
+        return None, None, None
+        
     try:
-        df_setores_ref = pd.read_csv(arquivo_setores_csv, sep=None, engine='python', encoding='utf-8-sig', header=None)
+        df_setores_ref = pd.read_csv(
+            arquivo_setores_csv, 
+            sep=None, 
+            engine='python', 
+            encoding='utf-8-sig', 
+            header=None,
+            names=list(range(10))
+        )
         lista_setores = df_setores_ref[2].dropna().astype(str).str.strip().str.upper().unique().tolist()
-        print(f"✅ {len(lista_setores)} setores carregados da base de referência.")
     except Exception as e:
-        messagebox.showerror("Erro", f"Erro ao ler arquivo de setores fixo:\n{arquivo_setores_csv}\n\nDetalhe: {e}")
-        return
+        st.error(f"Erro ao ler a base de setores fixa: {e}")
+        return None, None, None
 
     # 2. CARREGAR BASE GERAL
     base_geral_nomes = []
@@ -60,17 +91,15 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
         try:
             df_g = pd.read_excel(arquivo_base_geral)
             base_geral_nomes = df_g.iloc[:, 0].astype(str).str.strip().str.upper().unique().tolist()
-            print(f"✅ Base geral carregada com sucesso.")
         except Exception as e:
-            print(f"⚠️ Base geral não carregada: {e}")
+            st.warning(f"Não foi possível cruzar com a Base Geral: {e}")
 
     # 3. ANALISAR EXCEL DE ROTAS
-    print(f"🔍 Analisando todas as abas de: {arquivo_excel}...")
     try:
         abas = pd.read_excel(arquivo_excel, sheet_name=None, header=None)
     except Exception as e:
-        messagebox.showerror("Erro", f"Erro ao abrir o Excel de Rotas:\n{e}")
-        return
+        st.error(f"Erro ao processar o arquivo de Fretado enviado: {e}")
+        return None, None, None
 
     relatorio_detalhado = []
     relatorio_resumido = []
@@ -83,7 +112,6 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
         for idx, row in df.iterrows():
             conteudo_linha = " ".join([str(item).upper() for item in row.values])
             
-            # REGRA: Localizar Rota (2 linhas acima de PONTOS DE REFERÊNCIA na Coluna F)
             if "PONTOS DE REFERÊNCIA" in conteudo_linha or "PONTOS DE REFERENCIA" in conteudo_linha:
                 dentro_do_bloco = True
                 if idx >= 2:
@@ -126,7 +154,6 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
                 h_fim = str(h_fim) if pd.notna(h_fim) else "00:00"
                 duracao = calcular_duracao(h_ini, h_fim)
 
-                # 1. Adicionar ao Detalhado
                 for _, p in grupo.iterrows():
                     na_base = "SIM" if p['nome'] in base_geral_nomes else "NÃO"
                     relatorio_detalhado.append({
@@ -140,7 +167,6 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
                         "NA BASE GERAL?": na_base if base_geral_nomes else "NÃO TESTADO"
                     })
                 
-                # 2. Adicionar ao Resumido (Uma linha por rota da aba)
                 relatorio_resumido.append({
                     "ABA ORIGEM": nome_aba,
                     "ROTA": r,
@@ -150,91 +176,75 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
                     "TEMPO TOTAL ROTA": duracao
                 })
 
-    # 4. EXPORTAÇÃO COM DUAS ABAS
+    # ALTERAÇÃO: Agora retornamos os DataFrames criados E o arquivo compilado em bytes
     if relatorio_detalhado:
         df_detalhe = pd.DataFrame(relatorio_detalhado)
         df_resumo = pd.DataFrame(relatorio_resumido)
         
-        try:
-            with pd.ExcelWriter(caminho_salvamento, engine='openpyxl') as writer:
-                df_detalhe.to_excel(writer, sheet_name="DETALHADO", index=False)
-                df_resumo.to_excel(writer, sheet_name="RESUMO_ROTAS", index=False)
-            messagebox.showinfo("Sucesso", f"Relatório gerado com sucesso em:\n{caminho_salvamento}")
-        except Exception as e:
-            messagebox.showerror("Erro ao Salvar", f"Não foi possível salvar o arquivo. Verifique se ele está fechado.\nErro: {e}")
-    else:
-        messagebox.showwarning("Aviso", "Nenhum dado correspondente foi encontrado para gerar o relatório.")
+        buffer_memoria = io.BytesIO()
+        with pd.ExcelWriter(buffer_memoria, engine='openpyxl') as writer:
+            df_detalhe.to_excel(writer, sheet_name="DETALHADO", index=False)
+            df_resumo.to_excel(writer, sheet_name="RESUMO_ROTAS", index=False)
+        return df_detalhe, df_resumo, buffer_memoria.getvalue()
+        
+    return None, None, None
 
-# --- INTERFACE GRÁFICA (MENU) ---
+# --- DESIGN DA INTERFACE WEB ---
+st.set_page_config(page_title="Painel de Fretados - PepsiCo", page_icon="🚀", layout="centered")
+st.title("Automação de Relatórios de Fretados")
+st.markdown("Insira o arquivo diário enviado para consolidar as informações das rotas automaticamente.")
 
-class AplicacaoLogistica:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Painel de Logística - PepsiCo")
-        self.root.geometry("620x260")
-        self.root.resizable(False, False)
-        
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        frame = ttk.Frame(root, padding="20")
-        frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Título Principal
-        lbl_titulo = ttk.Label(frame, text="Automação de Relatórios de Fretados", font=("Helvetica", 13, "bold"))
-        lbl_titulo.grid(row=0, column=0, columnspan=3, pady=(0, 20), sticky="w")
-        
-        # 1. Campo Arquivo de Fretado (Rotas)
-        ttk.Label(frame, text="Arquivo Fretado (.xlsx):").grid(row=1, column=0, sticky="w", pady=5)
-        self.txt_rotas = ttk.Entry(frame, width=42)
-        self.txt_rotas.grid(row=1, column=1, padx=5, pady=5)
-        ttk.Button(frame, text="Selecionar", command=self.selecionar_rotas).grid(row=1, column=2, pady=5)
-        
-        # 2. Campo Destino de Salvamento
-        ttk.Label(frame, text="Salvar Novo Arquivo em:").grid(row=2, column=0, sticky="w", pady=5)
-        self.txt_salvamento = ttk.Entry(frame, width=42)
-        self.txt_salvamento.grid(row=2, column=1, padx=5, pady=5)
-        ttk.Button(frame, text="Alterar Local", command=self.definir_salvamento).grid(row=2, column=2, pady=5)
-        
-        # Divisor Visual Corrido (Sem bugs de Statics)
-        ttk.Separator(frame, orient='horizontal').grid(row=3, column=0, columnspan=3, sticky="ew", pady=15)
-        
-        # Botão Processar
-        self.btn_processar = ttk.Button(frame, text="🚀 CONFIGURAR E PROCESSAR FRETADO", command=self.disparar_processamento)
-        self.btn_processar.grid(row=4, column=0, columnspan=3, ipady=6, sticky="ew")
+arquivo_fretado = st.file_uploader("Selecione a planilha de Fretado (.xlsx)", type=["xlsx"])
 
-    def selecionar_rotas(self):
-        caminho = filedialog.askopenfilename(title="Selecionar Planilha de Fretado", filetypes=[("Excel files", "*.xlsx")])
-        if caminho:
-            self.txt_rotas.delete(0, tk.END)
-            self.txt_rotas.insert(0, caminho)
+# Controle para limpar a memória se o usuário trocar ou remover o arquivo carregado
+if "ultimo_arquivo" not in st.session_state:
+    st.session_state.ultimo_arquivo = None
+
+if arquivo_fretado != st.session_state.ultimo_arquivo:
+    st.session_state.ultimo_arquivo = arquivo_fretado
+    if "df_detalhe" in st.session_state: del st.session_state.df_detalhe
+    if "df_resumo" in st.session_state: del st.session_state.df_resumo
+    if "resultado_bytes" in st.session_state: del st.session_state.resultado_bytes
+
+if arquivo_fretado is not None:
+    st.success("Planilha carregada com sucesso!")
+    
+    # O botão agora serve EXCLUSIVAMENTE para processar e salvar o resultado no estado da sessão
+    if st.button("🚀 PROCESSAR PLANILHA", use_container_width=True):
+        with st.spinner("Varrendo abas e aplicando regras de negócio..."):
+            df_detalhe, df_resumo, resultado_bytes = processar_logistica_pepsico(arquivo_fretado, BASE_SETORES_CSV, BASE_GERAL_EXCEL)
             
-            # Autopreenche uma sugestão de salvamento baseada no local do arquivo de origem
-            if not self.txt_salvamento.get():
-                sugestao_nome = os.path.join(os.path.dirname(caminho), f"RELATORIO_ROTAS_PEPSICO_{datetime.now().strftime('%d_%m_%H%M')}.xlsx")
-                self.txt_salvamento.insert(0, sugestao_nome)
+            if resultado_bytes:
+                st.session_state.df_detalhe = df_detalhe
+                st.session_state.df_resumo = df_resumo
+                st.session_state.resultado_bytes = resultado_bytes
+                st.balloons()
+                st.success("Análise finalizada!")
+            else:
+                st.warning("Nenhum dado compatível foi processado. Verifique os critérios da planilha.")
 
-    def definir_salvamento(self):
-        caminho = filedialog.asksaveasfilename(title="Definir Local de Destino", defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
-        if caminho:
-            self.txt_salvamento.delete(0, tk.END)
-            self.txt_salvamento.insert(0, caminho)
-
-    def disparar_processamento(self):
-        rotas = self.txt_rotas.get()
-        salvamento = self.txt_salvamento.get()
+    # Se os dados já foram processados, exibe as tabelas e permite filtragem sem resetar
+    if "resultado_bytes" in st.session_state:
+        # 1. Botão de Download permanece fixo no topo dos resultados
+        nome_saida = f"RELATORIO_ROTAS_PEPSICO_{datetime.now().strftime('%d_%m_%H%M')}.xlsx"
+        st.download_button(
+            label="📥 DOWNLOAD DO RELATÓRIO COMPLETO (.XLSX)",
+            data=st.session_state.resultado_bytes,
+            file_name=nome_saida,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
         
-        if not rotas:
-            messagebox.showwarning("Campo Vazio", "Por favor, selecione a planilha de fretado de entrada.")
-            return
-        if not salvamento:
-            messagebox.showwarning("Campo Vazio", "Por favor, defina um nome e local para salvar o relatório consolidado.")
-            return
+        # 2. Exibição das abas visuais na tela puxando os dados da sessão
+        st.markdown("### 📊 Visualização das Tabelas")
+        aba_detalhado, aba_resumo = st.tabs(["📋 Relatório Detalhado", "📈 Resumo das Rotas"])
+        
+        with aba_detalhado:
+            # Filtra e exibe o DataFrame detalhado salvo na sessão
+            df_detalhe_filtrado = filtrar_dataframe(st.session_state.df_detalhe, "detalhe")
+            st.dataframe(df_detalhe_filtrado, use_container_width=True)
             
-        # Executa o processamento injetando os caminhos internos fixos
-        processar_logistica_pepsico(rotas, BASE_SETORES_CSV, BASE_GERAL_EXCEL, salvamento)
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = AplicacaoLogistica(root)
-    root.mainloop()
+        with aba_resumo:
+            # Filtra e exibe o DataFrame resumo salvo na sessão
+            df_resumo_filtrado = filtrar_dataframe(st.session_state.df_resumo, "resumo")
+            st.dataframe(df_resumo_filtrado, use_container_width=True)

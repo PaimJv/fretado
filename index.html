@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>Painel de Fretados - PepsiCo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.js"></script>
+    <script>
+      stlite.mount(
+        {
+          requirements: ["pandas", "openpyxl"],
+          entrypoint: "fretado.py",
+          files: {
+            // Vincula o script python externo localizado na mesma pasta
+            "fretado.py": { url: "fretado.py" },
+            
+            // Vincula as bases fixas mantendo a árvore de diretórios exigida pelo script
+            "facilities/fretado/Fretado Fab BA 2026(SETORES E EMPRESAS).csv": { url: "facilities/fretado/Fretado Fab BA 2026(SETORES E EMPRESAS).csv" },
+            "facilities/fretado/Fretado Fab BA 2026.xlsx": { url: "facilities/fretado/Fretado Fab BA 2026.xlsx" }
+          }
+        },
+        document.getElementById("root")
+      );
+    </script>
+  </body>
+</html>
