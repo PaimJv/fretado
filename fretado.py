@@ -72,15 +72,20 @@ def processar_logistica_pepsico(arquivo_excel, arquivo_setores_csv, arquivo_base
         return None, None, None
         
     try:
+        # CORREÇÃO: Adicionado quoting=3 (csv.QUOTE_NONE) para fazer o Pandas ignorar o controle 
+        # de aspas do parser e tratar tudo como texto puro. Isso evita o erro do Git/GitHub.
         df_setores_ref = pd.read_csv(
             arquivo_setores_csv, 
             sep=None, 
             engine='python', 
             encoding='utf-8-sig', 
             header=None,
-            names=list(range(10))
+            names=list(range(10)),
+            quoting=3
         )
-        lista_setores = df_setores_ref[2].dropna().astype(str).str.strip().str.upper().unique().tolist()
+        # CORREÇÃO: Como ignoramos as aspas no parser, limpamos qualquer aspa residual textualmente
+        # com o .str.replace('"', '') antes de registrar na lista de setores.
+        lista_setores = df_setores_ref[2].dropna().astype(str).str.replace('"', '').str.strip().str.upper().unique().tolist()
     except Exception as e:
         st.error(f"Erro ao ler a base de setores fixa: {e}")
         return None, None, None
